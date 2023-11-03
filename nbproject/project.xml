@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://www.netbeans.org/ns/project/1">
+    <type>com.microchip.mplab.nbide.embedded.makeproject</type>
+    <configuration>
+        <data xmlns="http://www.netbeans.org/ns/make-project/1">
+            <name>XWB11635_fw</name>
+            <creation-uuid>d664f550-220a-425a-a1a9-4ef2300b210e</creation-uuid>
+            <make-project-type>0</make-project-type>
+            <c-extensions>c</c-extensions>
+            <cpp-extensions/>
+            <header-extensions>h</header-extensions>
+            <asminc-extensions/>
+            <sourceEncoding>ISO-8859-1</sourceEncoding>
+            <sourceRootList>
+                <sourceRootElem>.</sourceRootElem>
+                <sourceRootElem>../../../../Program Files (x86)/Microchip/xc16/v1.35/support/generic/h</sourceRootElem>
+                <sourceRootElem>../../../../Program Files (x86)/Microchip/xc16/v1.35/support/dsPIC33F/h</sourceRootElem>
+            </sourceRootList>
+            <confList>
+                <confElem>
+                    <name>for_bootloader</name>
+                    <type>2</type>
+                </confElem>
+                <confElem>
+                    <name>debug</name>
+                    <type>2</type>
+                </confElem>
+            </confList>
+            <formatting>
+                <project-formatting-style>false</project-formatting-style>
+            </formatting>
+            <make-dep-projects/>
+        </data>
+    </configuration>
+</project>

@@ -1,0 +1,353 @@
+MPLAB XC16 ASSEMBLY Listing:  smps_control_library_vAugust_05_2016/src/smps_pid_dspic.s 			page 1
+
+
+   1              	;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+   2              	; (c) 2013 Microchip Technology Inc.
+   3              	;
+   4              	; MICROCHIP SOFTWARE NOTICE AND DISCLAIMER:  You may use this software, and any
+   5              	; derivatives created by any person or entity by or on your behalf, exclusively with
+   6              	; Microchip?s products.  Microchip and its licensors retain all ownership and intellectual
+   7              	; property rights in the accompanying software and in all derivatives here to.
+   8              	;
+   9              	; This software and any accompanying information is for suggestion only.  It does not
+  10              	; modify Microchip?s standard warranty for its products.  You agree that you are solely
+  11              	; responsible for testing the software and determining its suitability.  Microchip has
+  12              	; no obligation to modify, test, certify, or support the software.
+  13              	;
+  14              	; THIS SOFTWARE IS SUPPLIED BY MICROCHIP "AS IS".  NO WARRANTIES, WHETHER EXPRESS, IMPLIED
+  15              	; OR STATUTORY, INCLUDING, BUT NOT LIMITED TO, IMPLIED WARRANTIES OF NON-INFRINGEMENT,
+  16              	; MERCHANTABILITY, AND FITNESS FOR A PARTICULAR PURPOSE APPLY TO THIS SOFTWARE, ITS INTERACTION
+  17              	; WITH MICROCHIP?S PRODUCTS, COMBINATION WITH ANY OTHER PRODUCTS, OR USE IN ANY APPLICATION.
+  18              	;
+  19              	; IN NO EVENT, WILL MICROCHIP BE LIABLE, WHETHER IN CONTRACT, WARRANTY, TORT
+  20              	; (INCLUDING NEGLIGENCE OR BREACH OF STATUTORY DUTY), STRICT LIABILITY, INDEMNITY,
+  21              	; CONTRIBUTION, OR OTHERWISE, FOR ANY INDIRECT, SPECIAL, PUNITIVE, EXEMPLARY, INCIDENTAL
+  22              	; OR CONSEQUENTIAL LOSS, DAMAGE, FOR COST OR EXPENSE OF ANY KIND WHATSOEVER RELATED TO THE
+  23              	; SOFTWARE, HOWSOEVER CAUSED, EVEN IF MICROCHIP HAS BEEN ADVISED OF THE POSSIBILITY OR
+  24              	; THE DAMAGES ARE FORESEEABLE.  TO THE FULLEST EXTENT ALLOWABLE BY LAW, MICROCHIP'S TOTAL
+  25              	; LIABILITY ON ALL CLAIMS IN ANY WAY RELATED TO THIS SOFTWARE WILL NOT EXCEED THE AMOUNT OF FEES,
+  26              	; IF ANY, THAT YOU HAVE PAID DIRECTLY TO MICROCHIP FOR THIS SOFTWARE.
+  27              	;
+  28              	; MICROCHIP PROVIDES THIS SOFTWARE CONDITIONALLY UPON YOUR ACCEPTANCE OF THESE TERMS.
+  29              	;
+  30              	;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+  31              	
+  32              	; Local inclusions.
+  34              		.list
+  35              	
+  36              	; Define data structure address offsets
+  37              	    .equ    offsetabcCoefficients, 	0
+  38              		.equ    offsetErrorHistory,     2
+  39              		.equ    offsetControlHistory,   4 
+  40              		.equ	offsetPostScaler, 		6
+  41              	    .equ	offsetPreShift,			8
+  42              		.equ	offsetPostShift,        10
+  43              		.equ	offsetMinOutput,        12
+  44              		.equ	offsetMaxOutput,        14
+  45              	
+  46              	
+  47              	;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+  48              	
+  49              	;        .section .libdsp, code		; use this section type when used as hidden library file
+  50              	        .section .text				; use this section type for debugging
+  51              	
+  52              	;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+  53              	;
+  54              	; _cPID16b_v1 :
+  55              	; Prototype:
+  56              	;      void SMPS_ControllerPIDUpdate(SMPS_PID_T* controllerData,
+  57              	;                 volatile uint16_t* controllerInputRegister,int16_t reference,
+  58              	;                 volatile uint16_t* controllerOutputRegister);
+MPLAB XC16 ASSEMBLY Listing:  smps_control_library_vAugust_05_2016/src/smps_pid_dspic.s 			page 2
+
+
+  59              	; Operation:
+  60              	;
+  61              	;                                             ----   Proportional
+  62              	;                                            |    |  Output
+  63              	;                             ---------------| Kp |-----------------
+  64              	;                            |               |    |                 |
+  65              	;                            |                ----                  |
+  66              	;Reference                   |                                     ---
+  67              	;Input         ---           |           --------------  Integral | + | Control   -------
+  68              	;     --------| + |  Control |          |      Ki      | Output   |   | Output   |       |
+  69              	;             |   |----------|----------| ------------ |----------| + |----------| Plant |--
+  70              	;        -----| - |Difference|          |  1 - Z^(-1)  |          |   |          |       |  |
+  71              	;       |      ---  (error)  |           --------------           | + |           -------   |
+  72              	;       |                    |                                     ---                      |
+  73              	;       | Measured           |         -------------------  Deriv   |                       |
+  74              	;       | Outut              |        |                   | Output  |                       |
+  75              	;       |                     --------| Kd * (1 - Z^(-1)) |---------                        |
+  76              	;       |                             |                   |                                 |
+  77              	;       |                              -------------------                                  |
+  78              	;       |                                                                                   |
+  79              	;       |                                                                                   |
+  80              	;        -----------------------------------------------------------------------------------
+  81              	;
+  82              	;   controlOutput[n] = controlHistory[n-1]
+  83              	;                    + ErrorHistory[n] * abcCoefficients[0]
+  84              	;                    + ErrorHistory[n-1] * abcCoefficients[1]
+  85              	;                    + ErrorHistory[n-2] * abcCoefficients[2]
+  86              	;
+  87              	;  where:
+  88              	;   abcCoefficients[0] = Kp + Ki + Kd
+  89              	;   abcCoefficients[1] = -(Kp + 2*Kd)
+  90              	;   abcCoefficients[2] = Kd
+  91              	;   ErrorHistory[n] = referenceInput[n] - measuredInput[n]
+  92              	;   controlHistory = > control calculated output[n-1]
+  93              	;   preShift          = prsft	=> pre scaling factor for Q15 normalization purposes
+  94              	;   postShift         = posft	=> post scaling factor for normalization purposes
+  95              	;   postScaler        = postScaler => post scaling coefficient for normalization purpose
+  96              	;
+  97              	;   Function call inputs:
+  98              	;   sourceRegister    = ADBUFx  => measured feedback input   
+  99              	;   controlReference  = V_ref	=> reference voltage
+ 100              	;   targetRegister = PDCx => output duty cycle
+ 101              	;
+ 102              	;   where:
+ 103              	;   abcCoefficients, controlHistory, controlOutput, controlInput and controlReference
+ 104              	;   are all members of the data structure SMPS_PID_T.
+ 105              	;
+ 106              	; Input:
+ 107              	;       w0 = Address of SMPS_PID_T data structure
+ 108              	;       w1 = Address of the Source Register (Input)
+ 109              	;       w2 = Control Reference
+ 110              	;       w3 = Address of the Target Register (Output)
+ 111              	; Return:
+ 112              	;       w0 = Address of SMPS_PID_T data structure
+ 113              	;       w1 = Address of the Source Register (Input)
+ 114              	;       w2 = Control Reference
+ 115              	;       w3 = Address of the Target Register (Output)
+MPLAB XC16 ASSEMBLY Listing:  smps_control_library_vAugust_05_2016/src/smps_pid_dspic.s 			page 3
+
+
+ 116              	;
+ 117              	; System resources usage:
+ 118              	;       {w4..w5}        used, not restored
+ 119              	;       {w8,w10}        saved, used, restored
+ 120              	;        AccA           used, not restored
+ 121              	;        CORCON         saved, used, restored
+ 122              	;
+ 123              	; Note
+ 124              	;  This function requires CORCON register to be setup in a certain state
+ 125              	;  in order to operate correctly. Due to this requirement, this function
+ 126              	;  will save the CORCON register on the stack in the beginning of the
+ 127              	;  function and restore it before the function return.
+ 128              	;  After saving the CORCON register, this function writes to all bits of
+ 129              	;  the CORCON register. Thus, for the brief duration when this function is
+ 130              	;  executing, the state of CORCON register may be different from its state
+ 131              	;  as set by the function caller. This may change the CPU core behaviour with
+ 132              	;  respect to exception processing latency, DO loop termination, CPU interrupt
+ 133              	;  priority level and DSP-engine behaviour.
+ 134              	;............................................................................
+ 135              	
+ 136              	
+ 137              	        .global _SMPS_ControllerPIDUpdate                    ; provide global scope to routine
+ 138              	_SMPS_ControllerPIDUpdate:
+ 139              	
+ 140              	   ; Save working registers.
+ 141 000000  84 1F 78 	        push	w4						; Save register W4
+ 142 000002  85 1F 78 	        push	w5						; Save register W5
+ 143 000004  88 1F 78 	        push    w8						; Save register W8
+ 144 000006  8A 1F 78 	        push    w10						; Save register W10
+ 145 000008  00 00 F8 	        push    CORCON                  ; Save CORCON as it will be modified for fractional computa
+ 146              	
+ 147              	   ; Set up DSP core for signed fractional operation, saturation on accumulator A
+ 148              	   ; and for write-back instructions from ACCx to WREGx,
+ 149              	   ; accumulator saturation mode is 1.31
+ 150              	
+ 151 00000a  44 0E 20 	        mov  #0x00E4, w4
+ 152 00000c  04 00 88 	        mov  w4, _CORCON
+ 153              	
+ 154              	  ; Initialize source input, reference, error history and normalization variables
+ 155              	
+ 156 00000e  10 05 90 	        mov [w0 + #offsetErrorHistory], w10      ; w10 = Address of _ErrorHistory array (state/dela
+ 157 000010  40 04 90 	        mov [w0 + #offsetPreShift], w8			 ; Load error amplifier normalization bit-shift step
+ 158              	
+ 159              	   ; Calculate most recent error with normalization,
+ 160              	
+ 161 000012  91 02 51 			sub w2, [w1], w5                   			; w5 = Reference - inputSource
+ 162 000014  88 2A DD 			sl	w5, w8, w5								; shift error by PRE_SHIFT bit to the left (Q15 scaling)
+ 163              	
+ 164              	   ; Store most recent error to error history array
+ 165 000016  05 0D 78 			mov 	w5, [w10]                           ; controllerPID.errorHistory[n] = w5
+ 166              	
+ 167              	   ; Initialize coefficients and history array
+ 168              	
+ 169 000018  00 04 90 	        mov [w0 + #offsetabcCoefficients], w8    ; w8 = Base Address of _abcCoefficients array [(Kp
+ 170 00001a  20 01 90 	        mov [w0 + #offsetControlHistory], w2      ; w1=ControlOutput[n-1], load previous control ou
+ 171              	
+ 172              	   ; Calculate PID Control Output
+MPLAB XC16 ASSEMBLY Listing:  smps_control_library_vAugust_05_2016/src/smps_pid_dspic.s 			page 4
+
+
+ 173 00001c  46 04 C3 	        clr     a, [w8]+=2, w4, [w10]+=2, w5            ; w4 = (Kp+Ki+Kd), w5 = _ErrorHistory[n]
+ 174 00001e  02 00 CA 	        lac     w2, a                                   ; A = ErrorOutput[n-1]
+ 175 000020  46 04 C0 	        mac     w4*w5, a, [w8]+=2, w4, [w10]+=2, w5     ; A += (Kp+Ki+Kd) * _ErrorHistory[n]
+ 176              	                                                        ; w4 = -(Kp+2Kd), w5 = _ErrorHistory[n-1]
+ 177 000022  1E 04 C0 	        mac     w4*w5, a, [w8], w4, [w10]-=2, w5        ; A += -(Kp+2Kd) * _ErrorHistory[n-1]
+ 178              	                                                        ; w4 = Kd, w5 = _ErrorHistory[n-2]
+ 179 000024  1E 05 C0 	        mac     w4*w5, a, [w10]-=2, w5                  ; A += Kd * _ErrorHistory[n-2]
+ 180              	                                                        ; w5 = _ErrorHistory[n-1]
+ 181              	                                                        ; w10 = &_ErrorHistory[n-2]
+ 182 000026  05 00 CD 	        sac.r   a, w5                                   ; ControlOutput[n] = Sat(Rnd(A))
+ 183              	
+ 184              	    ; Copy control output to structure (non-array)
+ 185 000028  25 00 98 	        mov w5, [w0 + #offsetControlHistory]
+ 186              	
+ 187              			; Backwards normalization & write back
+ 188 00002a  50 04 90 			mov		[w0 + #offsetPostShift], w8				; w8 = Normalization Shift to compensate coefficient scaling
+ 189 00002c  08 00 C8 			sftac	a, w8									; Backward normalization to compensate coefficient scaling
+ 190 00002e  04 00 CD 	        sac.r   a, w4                                   ; w4 = Sat(Rnd(ACCAH))
+ 191              	
+ 192              	        ; Initialize Scale-factor and multiply
+ 193 000030  B0 02 90 			mov 	[w0 + #offsetPostScaler],  w5			; w5 = postScaler
+ 194 000032  13 01 C0 	        mpy		w4*w5, a								; Multiply control output and scale-factor
+ 195 000034  04 00 CD 			sac.r   a, w4                               	; w4 = Sat(Rnd(ACCAH))
+ 196              	
+ 197              	
+ 198              	     ; Clamp controller output to min/max values if needed
+ 199 000036  E0 02 90 	        mov 	[w0 + #offsetMinOutput], w5
+ 200 000038  15 20 E6 			cpsgt	w4, w5
+ 201 00003a  05 02 78 	        mov.w   w5, w4
+ 202 00003c  F0 02 90 	        mov 	[w0 + #offsetMaxOutput], w5
+ 203 00003e  15 A0 E6 			cpslt	w4, w5
+ 204 000040  05 02 78 	        mov.w   w5, w4
+ 205              	
+ 206              	     ; Controller write back into target register
+ 207 000042  84 09 78 			mov w4, [w3]							; write result into target register
+ 208              	
+ 209              	    ;Update control output history on the delay line
+ 210 000044  9A 02 90 			mov     [w10 + #2], w5          ; W5 = ErrorHistory[n-1]
+ 211 000046  25 05 98 	        mov     w5, [w10 + #4]			; ErrorHistory[n-2] = W5
+ 212 000048  9A 02 78 	        mov     [w10], w5           	; W5 = ErrorHistory[n]
+ 213 00004a  15 05 98 	        mov     w5, [w10 + #2] 			; ErrorHistory[n-1] = W5
+ 214              	
+ 215              	
+ 216 00004c  00 00 F9 	        pop     CORCON                  ; restore CORCON.
+ 217 00004e  4F 05 78 	        pop     w10                     ; Restore working registers.
+ 218 000050  4F 04 78 	        pop     w8
+ 219 000052  CF 02 78 	        pop     w5
+ 220 000054  4F 02 78 	        pop     w4
+ 221              	
+ 222 000056  00 00 06 	        return
+ 223              	
+ 224              	
+ 225              	
+ 226              	
+ 227              	;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+ 228              	
+ 229              	;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+MPLAB XC16 ASSEMBLY Listing:  smps_control_library_vAugust_05_2016/src/smps_pid_dspic.s 			page 5
+
+
+ 230              	; _SMPS_ControllerPIDInitialize:
+ 231              	;
+ 232              	; Prototype:
+ 233              	; void SMPS_PIDInitialize( SMPS_PID_T *controller_data )
+ 234              	;
+ 235              	; Operation: This routine clears the delay line elements in the arrays
+ 236              	;            _ControlHistory and _ErrorHistory, as well as clears the current
+ 237              	;            control output element, _ControlOutput
+ 238              	;
+ 239              	; Input:
+ 240              	;       w0 = Address of data structure SMPS_PID_T (type defined in smps_control.h)
+ 241              	;
+ 242              	; Return:
+ 243              	;       (void)
+ 244              	;
+ 245              	; System resources usage:
+ 246              	;       w0      saved, used, restored
+ 247              	;
+ 248              	;............................................................................
+ 249              	
+ 250              		.global _SMPS_ControllerPIDInitialize                ; provide global scope to routine
+ 251              	
+ 252              	_SMPS_ControllerPIDInitialize:
+ 253              	
+ 254              			; Clean up most recent controller output
+ 255 000058  80 1F 78 	        push    w0
+ 256 00005a  40 00 B0 	        add     #offsetControlHistory, w0 ;clear controlOutput
+ 257 00005c  00 08 EB 	        clr     [w0]
+ 258 00005e  4F 00 78 	        pop     w0
+ 259              	
+ 260              	        ; Clean up errorHistory variables
+ 261 000060  80 1F 78 	        push	w0							;Set up pointer to the base of
+ 262 000062  10 00 90 	        mov     [w0 + #offsetErrorHistory], w0	; w0 = Address of _ErrorHistory array (e[n], e[n-1],
+ 263 000064  00 18 EB 	        clr     [w0++]                  ; ErrorHistory[n]   = 0
+ 264 000066  00 18 EB 	        clr     [w0++]                  ; ErrorHistory[n-1] = 0
+ 265 000068  00 08 EB 	        clr     [w0]                    ; ErrorHistory[n-2] = 0
+ 266 00006a  4F 00 78 	        pop     w0                      ;Restore pointer to base of SMPS_PID_T
+ 267 00006c  00 00 06 	        return
+ 268              	
+ 269              	;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+ 270              	
+ 271              	        .end
+MPLAB XC16 ASSEMBLY Listing:  smps_control_library_vAugust_05_2016/src/smps_pid_dspic.s 			page 6
+
+
+DEFINED SYMBOLS
+                            *ABS*:00000001 __MPLAB_BUILD
+                            *ABS*:00000001 __33EP256MC204
+                            *ABS*:00000001 __dsPIC33E
+                            *ABS*:00000001 ÿÿ33EP256MC204
+                            *ABS*:00000001 __HAS_DSP
+                            *ABS*:00000001 __HAS_DMAV2
+                            *ABS*:00000001 __HAS_CODEGUARD
+                            *ABS*:00000001 __HAS_EDS
+                            *ABS*:00000001 __HAS_EP
+                            *ABS*:00000011 __TARGET_DIVIDE_CYCLES
+                            *ABS*:00000001 __C30ELF
+smps_control_library_vAugust_05_2016/src/smps_pid_dspic.s:37     *ABS*:00000000 offsetabcCoefficients
+smps_control_library_vAugust_05_2016/src/smps_pid_dspic.s:38     *ABS*:00000002 offsetErrorHistory
+smps_control_library_vAugust_05_2016/src/smps_pid_dspic.s:39     *ABS*:00000004 offsetControlHistory
+smps_control_library_vAugust_05_2016/src/smps_pid_dspic.s:40     *ABS*:00000006 offsetPostScaler
+smps_control_library_vAugust_05_2016/src/smps_pid_dspic.s:41     *ABS*:00000008 offsetPreShift
+smps_control_library_vAugust_05_2016/src/smps_pid_dspic.s:42     *ABS*:0000000a offsetPostShift
+smps_control_library_vAugust_05_2016/src/smps_pid_dspic.s:43     *ABS*:0000000c offsetMinOutput
+smps_control_library_vAugust_05_2016/src/smps_pid_dspic.s:44     *ABS*:0000000e offsetMaxOutput
+smps_control_library_vAugust_05_2016/src/smps_pid_dspic.s:138    .text:00000000 _SMPS_ControllerPIDUpdate
+smps_control_library_vAugust_05_2016/src/smps_pid_dspic.s:252    .text:00000058 _SMPS_ControllerPIDInitialize
+smps_control_library_vAugust_05_2016/src/smps_pid_dspic.s:141    .text:00000000 .L0
+                            .text:00000000 .L0
+smps_control_library_vAugust_05_2016/src/smps_pid_dspic.s:271    .text:0000006e .L0
+
+UNDEFINED SYMBOLS
+CORCON
+_CORCON
+
+EQUATE SYMBOLS
+                   __MPLAB_BUILD = 0x1
+                  __33EP256MC204 = 0x1
+                      __dsPIC33E = 0x1
+                  ÿÿ33EP256MC204 = 0x1
+                       __HAS_DSP = 0x1
+                     __HAS_DMAV2 = 0x1
+                 __HAS_CODEGUARD = 0x1
+                       __HAS_EDS = 0x1
+                        __HAS_EP = 0x1
+          __TARGET_DIVIDE_CYCLES = 0x11
+                        __C30ELF = 0x1
+           offsetabcCoefficients = 0x0
+              offsetErrorHistory = 0x2
+            offsetControlHistory = 0x4
+                offsetPostScaler = 0x6
+                  offsetPreShift = 0x8
+                 offsetPostShift = 0xa
+                 offsetMinOutput = 0xc
+                 offsetMaxOutput = 0xe
+
+SECTION INFORMATION:
+
+Section        Length (PC units)   Length (bytes) (dec)
+-------        -----------------   --------------------
+.text                       0x6e            0xa5  (165)
+
+TOTAL PROGRAM MEMORY USED (bytes):          0xa5  (165)
+
+Section           Alignment Gaps   Length (bytes) (dec)
+-------           --------------   --------------------
+.data                          0               0  (0)
+.bss                           0               0  (0)
+
+   TOTAL DATA MEMORY USED (bytes):             0  (0)

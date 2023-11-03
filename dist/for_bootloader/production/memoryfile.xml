@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<project>
+  <executable name="dist/for_bootloader/production/XWB11635_fw.production.elf">
+    <memory name="data">
+      <units>bytes</units>
+      <length>32768</length>
+      <used>5454</used>
+      <free>27314</free>
+    </memory>
+    <memory name="program">
+      <units>bytes</units>
+      <length>254946</length>
+      <used>45648</used>
+      <free>209298</free>
+    </memory>
+  </executable>
+</project>
